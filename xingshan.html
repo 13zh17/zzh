@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>星闪开发板简易仿真器</title>
+<style>
+*{box-sizing:border-box;font-family:system-ui}
+body{background:#222;color:#fff;padding:20px}
+.container{max-width:700px;margin:0 auto}
+.board{background:#333;padding:24px;border-radius:12px}
+.led-matrix{display:grid;grid-template-columns:repeat(16,20px);gap:2px;margin-bottom:16px}
+.dot{width:18px;height:18px;background:#111;border-radius:3px;transition:0.2s}
+.dot.on{background:#3f9;color:#7fdf7f;box-shadow:0 0 6px #3f9}
+.btns{margin:12px 0;display:flex;gap:10px}
+button{padding:8px 16px;border:none;border-radius:6px;font-size:15px;cursor:pointer}
+#burn{background:#2563eb;color:#fff}
+#reset{background:#dc2626;color:#fff}
+.console{margin-top:16px;background:#111;padding:12px;border-radius:8px;height:140px;overflow-y:auto;font-family:monospace;font-size:13px;color:#0f0}
+.input-area{margin:12px 0;display:flex;gap:8px}
+input{flex:1;padding:8px;border-radius:6px;border:none}
+#scrollBtn{background:#9333ea;color:#fff}
+.loading{color:#ff0;display:none}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="board">
+    <h3>星闪开发板仿真器</h3>
+    <div class="led-matrix" id="matrix"></div>
+    <div class="btns">
+      <button id="burn">烧录</button>
+      <button id="reset">复位</button>
+      <span class="loading" id="loading">正在编译、烧录中...</span>
+    </div>
+    <div class="input-area">
+      <input id="txtInput" value="hollowold" placeholder="输入文字">
+      <button id="scrollBtn">开启滚动字幕</button>
+    </div>
+    <div class="console" id="console">>>> 串口就绪</div>
+  </div>
+</div>
+
+<script>
+// 16x8点阵
+const COLS = 16, ROWS = 8;
+const matrixEl = document.getElementById('matrix');
+const consoleEl = document.getElementById('console');
+const loadingEl = document.getElementById('loading');
+const burnBtn = document.getElementById('burn');
+const resetBtn = document.getElementById('reset');
+const scrollBtn = document.getElementById('scrollBtn');
+const txtInput = document.getElementById('txtInput');
+
+let buffer = [];
+let scrollTimer = null;
+
+// 初始化点阵DOM
+function initMatrix(){
+  matrixEl.innerHTML = '';
+  buffer = Array(ROWS).fill().map(()=>Array(COLS).fill(0));
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const d = document.createElement('div');
+      d.className = 'dot';
+      d.dataset.r = r; d.dataset.c = c;
+      matrixEl.appendChild(d);
+    }
+  }
+}
+
+// 渲染点阵
+function render(){
+  const dots = matrixEl.querySelectorAll('.dot');
+  dots.forEach(d=>{
+    const r = +d.dataset.r, c = +d.dataset.c;
+    d.classList.toggle('on', buffer[r][c]===1);
+  })
+}
+
+// 简单ASCII字模（h o l w o l d）
+const font = {
+  'h':[0b01100,0b01000,0b01000,0b01110,0b01000,0b01000,0b01000,0],
+  'o':[0b00000,0b01100,0b10010,0b10010,0b10010,0b01100,0b00000,0],
+  'l':[0b00100,0b00100,0b00100,0b00100,0b00100,0b01110,0b00000,0],
+  'w':[0b00000,0b10010,0b10010,0b10010,0b10110,0b11010,0b10010,0],
+  'd':[0b00000,0b11100,0b10010,0b10010,0b10010,0b11100,0b00000,0]
+}
+
+// 清空屏幕
+function clearBuf(){
+  for(let r=0;r<ROWS;r++) buffer[r].fill(0);
+  render();
+}
+
+// 写一个字符到点阵，x偏移
+function drawChar(ch, xoff){
+  const bmp = font[ch.toLowerCase()];
+  if(!bmp) return;
+  for(let r=0;r<ROWS;r++){
+    let row = bmp[r];
+    for(let c=0;c<5;c++){
+      if(row & (1<<(4-c))){
+        let cc = xoff + c;
+        if(cc>=0 && cc<COLS) buffer[r][cc] = 1;
+      }
+    }
+  }
+}
+
+// 绘制整串文字
+function drawText(str){
+  clearBuf();
+  let pos = 0;
+  for(let ch of str){
+    drawChar(ch, pos);
+    pos += 6;
+  }
+  render();
+}
+
+// 串口打印
+function log(s){
+  consoleEl.innerHTML += '\n>>> ' + s;
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+}
+
+// 烧录按钮
+burnBtn.onclick = async ()=>{
+  loadingEl.style.display = 'inline';
+  log('开始编译代码...');
+  await sleep(600);
+  log('编译成功，开始烧录...');
+  await sleep(700);
+  log('烧录完成，启动开发板');
+  loadingEl.style.display = 'none';
+  drawText(txtInput.value);
+}
+
+// 复位
+resetBtn.onclick = ()=>{
+  clearBuf();
+  log('复位，回到上电初始状态');
+  if(scrollTimer) clearInterval(scrollTimer);
+}
+
+// 滚动字幕
+scrollBtn.onclick = ()=>{
+  if(scrollTimer) {
+    clearInterval(scrollTimer);
+    scrollTimer=null;
+    log('停止滚动');
+    return;
+  }
+  let offset = 0;
+  const s = txtInput.value;
+  scrollTimer = setInterval(()=>{
+    clearBuf();
+    let p = offset;
+    for(let ch of s){
+      drawChar(ch, p);
+      p +=6;
+    }
+    offset--;
+    if(offset < -6*s.length) offset = 16;
+    render();
+  },180);
+  log('开启滚动字幕');
+}
+
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+initMatrix();
+render();
+</script>
+</body>
+</html>
